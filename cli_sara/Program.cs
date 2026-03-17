@@ -1,0 +1,200 @@
+﻿using System.CommandLine;
+// אופציית השפות
+var languageOption = new Option<string>(
+    aliases: new[] { "--language", "-l" },
+    description: "יש להכניס שפות שישתמשו מהרשימה (e.g., css, py, js, java, c#) או 'all'")
+{ IsRequired = true };
+
+// האם לכתוב את המקור בהערה בקובץ
+var noteOption = new Option<bool>(
+    aliases: new[] { "--note", "-n" },
+    description: "האם לציין את מקור קוד המקור כהערה");
+
+// שם הקובץ וניתוב
+var outputOption = new Option<FileInfo>(
+    aliases: new[] { "--output", "-o" },
+    description: "נתיב ושם קובץ עבור קובץ החבילה");
+// סדר המיון א"ב או לפי קוד בררת מחדל לפי השם
+var sortOption = new Option<string>(
+    aliases: new[] { "--sort", "-s" },
+    getDefaultValue: () => "name",
+    description: "Sort order for files: 'name' (alphabetical) or 'type' (file extension)");
+
+// אפשרות לבחור לשים בראש הקובץ את שם היוצר
+var authorOption = new Option<string>(
+    aliases: new[] { "--author", "-a" },
+    description: "Name of the person who created the bundle");
+
+// אפשרות לבחור למחוק שורות ריקות מהמקור
+var removeEmptyLinesOption = new Option<bool>(
+    aliases: new[] { "--remove-empty-lines", "-r" },
+    description: "Remove empty lines from the source code files");
+
+
+var bundleCommand = new Command("bundle", "Bundle code files to a single file");
+
+bundleCommand.AddOption(outputOption);
+bundleCommand.AddOption(languageOption);
+bundleCommand.AddOption(noteOption);
+bundleCommand.AddOption(sortOption);
+bundleCommand.AddOption(removeEmptyLinesOption);
+bundleCommand.AddOption(authorOption);
+
+
+
+bundleCommand.SetHandler((language, output, note, sort, removeEmptyLines, author) =>
+{
+    // קבלת הנתיב של התיקייה הנוכחית שבה מריצים את התוכנה
+    var currentDirectory = Directory.GetCurrentDirectory();
+
+    // פקודה שמביאה את כל הקבצים מכל תתי-התיקיות
+    var allFiles = Directory.GetFiles(currentDirectory, "*.*", SearchOption.AllDirectories);
+
+    // 
+    var filteredFiles = allFiles.Where(file =>
+    !file.Contains("bin") &&
+    !file.Contains("debug") &&
+    !file.Contains("obj") &&
+    !file.Contains("publish")).ToList();
+
+    // 1. נגדיר אילו סיומות נחשבות קבצי קוד (אפשר להוסיף עוד בהמשך)
+    var codeExtensions = new[] { ".cs", ".java", ".py", ".cpp", ".js", ".txt", ".html", ".css" ,".pdf"};
+
+    // 2. נבצע את הסינון הסופי
+    var finalFiles = filteredFiles.Where(file =>
+    {
+        var extension = Path.GetExtension(file).ToLower();
+
+        // אם המשתמש בחר all - ניקח כל קובץ שיש לו סיומת של קוד
+        if (language == "all")
+        {
+            return codeExtensions.Contains(extension);
+        }
+
+        // אם המשתמש בחר שפה ספציפית (למשל cs)
+        // נבדוק אם הסיומת של הקובץ נמצאת בתוך מה שהמשתמש הקיש
+        return language.Contains(extension.TrimStart('.'));
+    }).ToList();
+
+    if (sort == "type")
+    {
+        // מיון לפי סיומת הקובץ
+        finalFiles = finalFiles.OrderBy(f => Path.GetExtension(f)).ThenBy(f => Path.GetFileName(f)).ToList();
+    }
+    else
+    {
+        // מיון ברירת מחדל: לפי א"ב של שם הקובץ
+        finalFiles = finalFiles.OrderBy(f => Path.GetFileName(f)).ToList();
+    }
+    Console.WriteLine($"Found {finalFiles.Count} files to bundle.");
+    foreach (var file in finalFiles)
+    {
+        Console.WriteLine($"-- Adding: {Path.GetFileName(file)}");
+    }
+    // הכתיבה לתוך הקובץ
+    try
+    {
+        using (StreamWriter writer = new StreamWriter(output.FullName))
+        {
+            // א. רישום שם היוצר (דרישת author)
+            if (!string.IsNullOrEmpty(author))
+            {
+                writer.WriteLine($"// Author: {author}");
+            }
+
+            foreach (var file in finalFiles)
+            {
+                // ב. רישום מקור הקוד (דרישת note)
+                if (note)
+                {
+                    writer.WriteLine($"// Source: {Path.GetFileName(file)}");
+                }
+
+                // קריאת כל השורות מהקובץ המקורי
+                var lines = File.ReadAllLines(file);
+
+                foreach (var line in lines)
+                {
+                    // ג. הסרת שורות ריקות (דרישת remove-empty-lines)
+                    if (removeEmptyLines && string.IsNullOrWhiteSpace(line))
+                    {
+                        continue; // דלג על השורה הזו
+                    }
+                    writer.WriteLine(line);
+                }
+
+                writer.WriteLine(); // הוספת שורה ריקה בין קבצים לסדר בעיניים
+            }
+        }
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine("✔ Bundle created successfully!");
+        Console.ResetColor(); // חשוב מאוד כדי שהטרמינל לא יישאר ירוק לנצח
+    }
+    catch (Exception)
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine("✘ Error: Could not write to the output file.");
+        Console.ResetColor();
+    }
+
+}, languageOption, outputOption, noteOption, sortOption, removeEmptyLinesOption, authorOption);
+
+var createRspCommand = new Command("create-rsp", "Create a response file for the bundle command");
+
+createRspCommand.SetHandler(() =>
+{
+    // כאן נשמור את התשובות של המשתמש
+    string? languages, output, note, sort, removeEmptyLines, author;
+
+    // שאלה 1: שפות
+    Console.Write("הכנס סיומות של שפות מופרדות בפסיקים או לבחירת הכל- 'all' ");
+    languages = Console.ReadLine();
+    while (string.IsNullOrWhiteSpace(languages))
+    {
+        Console.Write("נדרשת שפה! אנא הזן: ");
+        languages = Console.ReadLine();
+    }
+
+    // שאלה 2: נתיב פלט
+    Console.Write("הזן נתיב/שם של קובץ הפלט:");
+    output = Console.ReadLine();
+
+    // שאלה 3: הערות מקור
+    Console.Write("כלול הערות מקור? (y/n): ");
+    note = (Console.ReadLine()?.ToLower() ?? "") == "y" ? "--note" : "";
+    // שאלה 4: מיון
+    Console.Write("מיין לפי סוג או שם (name/type): ");
+    sort = Console.ReadLine();
+
+    // שאלה 5: הסרת שורות ריקות
+    Console.Write("להסיר שורות ריקות? (y/n): ");
+    removeEmptyLines = (Console.ReadLine()?.ToLower() ?? "") == "y" ? "--remove-empty-lines" : "";
+    // שאלה 6: שם יוצר
+    Console.Write("הזן שם המחבר: ");
+    author = Console.ReadLine();
+
+    // בניית המחרוזת של הפקודה
+    string commandContent = $"bundle --language \"{languages}\" --output \"{output}\"";
+    if (!string.IsNullOrEmpty(note)) commandContent += $" {note}";
+    if (!string.IsNullOrEmpty(sort)) commandContent += $" --sort {sort}";
+    if (!string.IsNullOrEmpty(removeEmptyLines)) commandContent += $" {removeEmptyLines}";
+    if (!string.IsNullOrEmpty(author)) commandContent += $" --author \"{author}\"";
+
+    // יצירת קובץ ה-response
+    try
+    {
+        File.WriteAllText("options.rsp", commandContent);
+        Console.WriteLine("Response file 'options.rsp' created successfully!");
+        Console.WriteLine("כדי להריץ את הקובץ יש להריץ: cli_sara @options.rsp");
+    }
+    catch (Exception)
+    {
+        Console.WriteLine("Error: Could not create response file.");
+    }
+});
+var rootCommand = new RootCommand("Root command for File Bundler CLI");
+rootCommand.AddCommand(createRspCommand);
+rootCommand.AddCommand(bundleCommand);
+await rootCommand.InvokeAsync(args);
+
+
